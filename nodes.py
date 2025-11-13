@@ -157,7 +157,6 @@ class QwenVL:
             snapshot_download(
                 repo_id=model_id,
                 local_dir=self.model_checkpoint,
-                local_dir_use_symlinks=False,
             )
 
         if self.processor is None:
@@ -371,7 +370,6 @@ class Qwen:
             snapshot_download(
                 repo_id=model_id,
                 local_dir=self.model_checkpoint,
-                local_dir_use_symlinks=False,
             )
 
         if self.tokenizer is None:
