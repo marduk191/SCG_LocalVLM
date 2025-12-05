@@ -328,6 +328,7 @@ class QwenVL:
             compute_dtype = torch.bfloat16 if self.bf16_support else torch.float16
 
             # Load the model on the available device(s)
+            # CRITICAL: Always set torch_dtype for ALL loading paths to prevent float32 default
             if quantization == "4bit":
                 quantization_config = BitsAndBytesConfig(
                     load_in_4bit=True,
@@ -337,7 +338,9 @@ class QwenVL:
                 )
                 load_kwargs = {
                     "quantization_config": quantization_config,
+                    "torch_dtype": compute_dtype,  # CRITICAL: Prevents float32 default
                     "device_map": "auto",
+                    "low_cpu_mem_usage": True,
                 }
             elif quantization == "8bit":
                 quantization_config = BitsAndBytesConfig(
@@ -346,7 +349,9 @@ class QwenVL:
                 )
                 load_kwargs = {
                     "quantization_config": quantization_config,
+                    "torch_dtype": compute_dtype,  # CRITICAL: Prevents float32 default
                     "device_map": "auto",
+                    "low_cpu_mem_usage": True,
                 }
             else:
                 # No quantization - load with optimal settings
@@ -622,6 +627,7 @@ class Qwen:
             compute_dtype = torch.bfloat16 if self.bf16_support else torch.float16
 
             # Load the model on the available device(s)
+            # CRITICAL: Always set torch_dtype for ALL loading paths to prevent float32 default
             if quantization == "4bit":
                 quantization_config = BitsAndBytesConfig(
                     load_in_4bit=True,
@@ -631,7 +637,9 @@ class Qwen:
                 )
                 load_kwargs = {
                     "quantization_config": quantization_config,
+                    "torch_dtype": compute_dtype,  # CRITICAL: Prevents float32 default
                     "device_map": "auto",
+                    "low_cpu_mem_usage": True,
                 }
             elif quantization == "8bit":
                 quantization_config = BitsAndBytesConfig(
@@ -640,7 +648,9 @@ class Qwen:
                 )
                 load_kwargs = {
                     "quantization_config": quantization_config,
+                    "torch_dtype": compute_dtype,  # CRITICAL: Prevents float32 default
                     "device_map": "auto",
+                    "low_cpu_mem_usage": True,
                 }
             else:
                 # No quantization - load with optimal settings

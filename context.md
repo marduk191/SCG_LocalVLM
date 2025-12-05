@@ -113,7 +113,10 @@ After implementing fixes:
 
 ### Critical Bug Fixes
 1. **Model Loading (Both Classes)**
-   - Added `low_cpu_mem_usage=True` for non-quantized models (prevents loading to CPU RAM first)
+   - **CRITICAL FIX**: Added `torch_dtype=compute_dtype` to ALL quantization paths (4bit, 8bit, none)
+     - Without this, quantized models default to float32 causing massive CPU RAM usage
+     - This was the root cause of poor GPU utilization and CPU bottleneck
+   - Added `low_cpu_mem_usage=True` for all loading paths
    - Added `bnb_8bit_compute_dtype=compute_dtype` to 8bit quantization config
    - Restructured loading logic to use `load_kwargs` dict for cleaner code
 
