@@ -1,12 +1,17 @@
 # ComfyUI Qwen VL Nodes
 
-This repository provides ComfyUI nodes that wrap the latest vision-language and language-only checkpoints from the Qwen family. Both **Qwen3 VL** and **Qwen2.5 VL** models are supported for multimodal reasoning, alongside text-only Qwen2.5 models for prompt generation.
+This repository provides ComfyUI nodes that wrap the latest vision-language and language-only checkpoints from the Qwen family. Both **Qwen3 VL** and **Qwen2.5 VL** models are supported for multimodal reasoning, alongside text-only Qwen2.5/Qwen3 models for prompt generation.
 
 ## What's New
 
-- Added support for the Qwen3 VL family (`Qwen3-VL-4B-Thinking`, `Qwen3-VL-8B-Thinking`, etc.).
-- Retained compatibility with existing Qwen2.5 VL models.
-- Text-only workflows continue to use the Qwen2.5 instruct checkpoints.
+- **Custom Model Support**: Load any Qwen2.5/Qwen3 compatible model from HuggingFace via `custom_models.json`
+- **Multi-Image Input**: QwenVL node now supports up to 4 image inputs for multi-image reasoning
+- **Bypass Mode**: Skip model inference and pass text directly through for workflow debugging
+- **Increased Token Limit**: Max tokens increased to 8000 for longer outputs
+- **System Prompt**: QwenVL node now exposes system prompt for custom instructions
+- Added support for the Qwen3 VL family (`Qwen3-VL-4B-Thinking`, `Qwen3-VL-8B-Thinking`, etc.)
+- Retained compatibility with existing Qwen2.5 VL models
+- Text-only workflows support both Qwen2.5 and Qwen3 instruct checkpoints
 
 ## Sample Workflows
 
@@ -40,11 +45,104 @@ You can install through ComfyUI Manager (search for `Qwen-VL wrapper for ComfyUI
 
 ## Supported Nodes
 
-- **Qwen2VL node** – Multimodal generation with Qwen3 VL and Qwen2.5 VL checkpoints. Accepts images or videos as optional inputs alongside text prompts.
-- **Qwen2 node** – Text-only generation backed by Qwen2.5 instruct models, with optional quantization for lower memory usage.
+### QwenVL Node (Vision-Language)
 
-Both nodes expose parameters for temperature, maximum token count, quantization (none/4-bit/8-bit), and manual seeding. Set `keep_model_loaded` to `True` to cache models between runs.
+Multimodal generation with Qwen3 VL and Qwen2.5 VL checkpoints.
+
+**Inputs:**
+- `system` – System prompt for model instructions (default: "You are a helpful assistant.")
+- `text` – User prompt/question
+- `image1`, `image2`, `image3`, `image4` – Up to 4 optional image inputs (processed in order)
+- `video_path` – Optional video input
+- `model` – Select from built-in or custom models
+- `quantization` – none/4-bit/8-bit for memory optimization
+- `keep_model_loaded` – Cache model between runs
+- `bypass` – Pass text directly to output without inference
+- `temperature` – Sampling temperature (0-1)
+- `max_new_tokens` – Maximum output tokens (up to 8000)
+- `seed` – Manual seed for reproducibility (-1 for random)
+
+### Qwen Node (Text-Only)
+
+Text-only generation backed by Qwen2.5/Qwen3 instruct models.
+
+**Inputs:**
+- `system` – System prompt
+- `prompt` – User prompt
+- `model` – Select from built-in or custom models
+- `quantization` – none/4-bit/8-bit
+- `keep_model_loaded` – Cache model between runs
+- `bypass` – Pass prompt directly to output without inference
+- `temperature`, `max_new_tokens`, `seed` – Generation parameters
+
+## Custom Models
+
+You can add any Qwen2.5 or Qwen3 compatible model from HuggingFace by editing the `custom_models.json` file in this directory.
+
+### Adding Custom Models
+
+Edit `custom_models.json` with the following structure:
+
+```json
+{
+  "hf_models": {
+    "My-Custom-Model-Name": {
+      "repo_id": "username/model-repo-name",
+      "model_class": "Qwen3",
+      "default": false,
+      "quantized": false,
+      "vram_requirement": {
+        "4bit": 4,
+        "8bit": 6,
+        "full": 12
+      }
+    }
+  }
+}
+```
+
+### Field Descriptions
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `repo_id` | **Yes** | HuggingFace repository ID (e.g., `"coder3101/Qwen3-VL-2B-Instruct-heretic"`) |
+| `model_class` | No | Force model architecture: `"Qwen3"` or `"Qwen2.5"`. Auto-detected from name if omitted. |
+| `default` | No | Reserved for future use |
+| `quantized` | No | Informational: whether the model is pre-quantized |
+| `vram_requirement` | No | Informational: estimated VRAM usage in GB for each quantization level |
+
+### Model Type Detection
+
+- **VL (Vision-Language) models**: Names containing `-VL-` are added to the QwenVL node dropdown
+- **Text-only models**: All other models are added to the Qwen node dropdown
+- **Model class**: Auto-detected from name (`Qwen3` if name contains "Qwen3", otherwise `Qwen2.5`)
+
+### Example: Adding a Fine-tuned Model
+
+```json
+{
+  "hf_models": {
+    "Qwen3-VL-2B-Instruct-Heretic": {
+      "repo_id": "coder3101/Qwen3-VL-2B-Instruct-heretic"
+    },
+    "My-Qwen3-8B-Finetune": {
+      "repo_id": "myusername/my-qwen3-8b-finetune",
+      "model_class": "Qwen3"
+    }
+  }
+}
+```
+
+Models are automatically downloaded from HuggingFace on first use and stored in `ComfyUI/models/LLM/`.
 
 ## Model Storage
 
 Downloaded models are stored under `ComfyUI/models/LLM/`.
+
+## Bypass Mode
+
+Both nodes include a `bypass` toggle. When enabled:
+- **QwenVL**: The `text` input is passed directly to the output without model inference
+- **Qwen**: The `prompt` input is passed directly to the output without model inference
+
+This is useful for workflow debugging or when you want to conditionally skip expensive model calls.

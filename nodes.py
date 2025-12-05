@@ -1,6 +1,7 @@
 import os
 import gc
 import inspect
+import json
 import torch
 from transformers import (
     Qwen2_5_VLForConditionalGeneration,
@@ -21,6 +22,128 @@ try:
     import comfy.model_management as comfy_mm
 except ImportError:  # ComfyUI runtime not available during development/tests
     comfy_mm = None
+
+
+# --- Custom Models Loading ---
+CUSTOM_MODELS_FILE = os.path.join(os.path.dirname(__file__), "custom_models.json")
+CUSTOM_VL_MODELS = {}  # name -> {repo_id, model_class, ...}
+CUSTOM_TEXT_MODELS = {}  # name -> {repo_id, ...}
+
+
+def _load_custom_models():
+    """Load custom models from custom_models.json if it exists."""
+    global CUSTOM_VL_MODELS, CUSTOM_TEXT_MODELS
+    if not os.path.exists(CUSTOM_MODELS_FILE):
+        return
+    
+    try:
+        with open(CUSTOM_MODELS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        
+        hf_models = data.get("hf_models", {})
+        for model_name, model_info in hf_models.items():
+            repo_id = model_info.get("repo_id", "")
+            if not repo_id:
+                continue
+            
+            # Determine if VL (vision-language) or text-only based on name
+            is_vl = "-VL-" in model_name.upper() or "-VL-" in repo_id.upper()
+            
+            # Determine model class from name pattern
+            model_class = model_info.get("model_class", None)
+            if model_class is None:
+                if "Qwen3" in model_name or "Qwen3" in repo_id:
+                    model_class = "Qwen3"
+                else:
+                    model_class = "Qwen2.5"
+            
+            model_entry = {
+                "repo_id": repo_id,
+                "model_class": model_class,
+                "default": model_info.get("default", False),
+                "quantized": model_info.get("quantized", False),
+                "vram_requirement": model_info.get("vram_requirement", {}),
+            }
+            
+            if is_vl:
+                CUSTOM_VL_MODELS[model_name] = model_entry
+            else:
+                CUSTOM_TEXT_MODELS[model_name] = model_entry
+        
+        if CUSTOM_VL_MODELS or CUSTOM_TEXT_MODELS:
+            print(f"[SCG_LocalVLM] Loaded {len(CUSTOM_VL_MODELS)} custom VL models and {len(CUSTOM_TEXT_MODELS)} custom text models from custom_models.json")
+    except Exception as e:
+        print(f"[SCG_LocalVLM] Warning: Failed to load custom_models.json: {e}")
+
+
+# Load custom models at startup
+_load_custom_models()
+
+
+def _get_model_repo_id(model_name, is_vl=True):
+    """Get the HuggingFace repo ID for a model name."""
+    # Check custom models first
+    if is_vl and model_name in CUSTOM_VL_MODELS:
+        return CUSTOM_VL_MODELS[model_name]["repo_id"]
+    if not is_vl and model_name in CUSTOM_TEXT_MODELS:
+        return CUSTOM_TEXT_MODELS[model_name]["repo_id"]
+    
+    # Built-in models
+    if model_name.startswith("Qwen"):
+        return f"qwen/{model_name}"
+    elif model_name == "SkyCaptioner-V1":
+        return f"Skywork/{model_name}"
+    else:
+        return f"qwen/{model_name}"
+
+
+def _get_model_class(model_name, is_vl=True):
+    """Determine which model class to use for loading."""
+    # Check custom models first
+    if is_vl and model_name in CUSTOM_VL_MODELS:
+        return CUSTOM_VL_MODELS[model_name].get("model_class", "Qwen3")
+    if not is_vl and model_name in CUSTOM_TEXT_MODELS:
+        return CUSTOM_TEXT_MODELS[model_name].get("model_class", "Qwen3")
+    
+    # Built-in: detect from name
+    if model_name.startswith("Qwen3"):
+        return "Qwen3"
+    return "Qwen2.5"
+
+
+# Build model lists including custom models
+BUILTIN_VL_MODELS = [
+    "Qwen2.5-VL-3B-Instruct",
+    "Qwen2.5-VL-7B-Instruct",
+    "Qwen3-VL-2B-Thinking",
+    "Qwen3-VL-2B-Instruct",
+    "Qwen3-VL-4B-Thinking",
+    "Qwen3-VL-4B-Instruct",
+    "Qwen3-VL-8B-Thinking",
+    "Qwen3-VL-8B-Instruct",
+    "Qwen3-VL-32B-Thinking",
+    "Qwen3-VL-32B-Instruct",
+    "SkyCaptioner-V1",
+]
+
+BUILTIN_TEXT_MODELS = [
+    "Qwen2.5-3B-Instruct",
+    "Qwen2.5-7B-Instruct",
+    "Qwen2.5-14B-Instruct",
+    "Qwen2.5-32B-Instruct",
+    "Qwen3-4B-Thinking-2507",
+    "Qwen3-4B-Instruct-2507",
+]
+
+
+def _get_vl_model_list():
+    """Get the full list of VL models including custom ones."""
+    return BUILTIN_VL_MODELS + list(CUSTOM_VL_MODELS.keys())
+
+
+def _get_text_model_list():
+    """Get the full list of text models including custom ones."""
+    return BUILTIN_TEXT_MODELS + list(CUSTOM_TEXT_MODELS.keys())
 
 
 def _maybe_move_to_cpu(module):
@@ -85,21 +208,16 @@ class QwenVL:
     def INPUT_TYPES(s):
         return {
             "required": {
+                "system": (
+                    "STRING",
+                    {
+                        "default": "You are a helpful assistant.",
+                        "multiline": True,
+                    },
+                ),
                 "text": ("STRING", {"default": "", "multiline": True}),
                 "model": (
-                    [
-                        "Qwen2.5-VL-3B-Instruct",
-                        "Qwen2.5-VL-7B-Instruct",
-                        "Qwen3-VL-2B-Thinking",
-                        "Qwen3-VL-2B-Instruct",
-                        "Qwen3-VL-4B-Thinking",
-                        "Qwen3-VL-4B-Instruct",
-                        "Qwen3-VL-8B-Thinking",
-                        "Qwen3-VL-8B-Instruct",
-                        "Qwen3-VL-32B-Thinking",
-                        "Qwen3-VL-32B-Instruct",
-                        "SkyCaptioner-V1",
-                    ],
+                    _get_vl_model_list(),
                     {"default": "Qwen3-VL-4B-Instruct"},
                 ),
                 "quantization": (
@@ -107,18 +225,22 @@ class QwenVL:
                     {"default": "none"},
                 ),
                 "keep_model_loaded": ("BOOLEAN", {"default": False}),
+                "bypass": ("BOOLEAN", {"default": False}),
                 "temperature": (
                     "FLOAT",
                     {"default": 0.7, "min": 0, "max": 1, "step": 0.1},
                 ),
                 "max_new_tokens": (
                     "INT",
-                    {"default": 512, "min": 128, "max": 2048, "step": 1},
+                    {"default": 512, "min": 128, "max": 8000, "step": 1},
                 ),
                 "seed": ("INT", {"default": -1}),
             },
             "optional": {
-                "image": ("IMAGE",),
+                "image1": ("IMAGE",),
+                "image2": ("IMAGE",),
+                "image3": ("IMAGE",),
+                "image4": ("IMAGE",),
                 "video_path": ("STRING", {"default": ""}),
             },
         }
@@ -129,23 +251,29 @@ class QwenVL:
 
     def inference(
         self,
+        system,
         text,
         model,
         quantization,
         keep_model_loaded,
+        bypass,
         temperature,
         max_new_tokens,
         seed,
-        image=None,
+        image1=None,
+        image2=None,
+        image3=None,
+        image4=None,
         video_path=None,
     ):
+        # Bypass mode: pass text directly to output without model inference
+        if bypass:
+            return (text,)
+
         if seed != -1:
             torch.manual_seed(seed)
 
-        if model.startswith("Qwen"):
-            model_id = f"qwen/{model}"
-        else:
-            model_id = f"Skywork/{model}"
+        model_id = _get_model_repo_id(model, is_vl=True)
         # put downloaded model to model/LLM dir
         self.model_checkpoint = os.path.join(
             folder_paths.models_dir, "LLM", os.path.basename(model_id)
@@ -186,7 +314,8 @@ class QwenVL:
                 quantization_config = None
 
             # Choose the appropriate model class based on the model family
-            if model.startswith("Qwen3"):
+            model_class = _get_model_class(model, is_vl=True)
+            if model_class == "Qwen3":
                 self.model = Qwen3VLForConditionalGeneration.from_pretrained(
                     self.model_checkpoint,
                     torch_dtype=torch.bfloat16 if self.bf16_support else torch.float16,
@@ -205,16 +334,27 @@ class QwenVL:
         result = None
 
         with torch.no_grad():
-            messages = [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": text},
-                    ],
-                }
-            ]
+            # Build user content list - images first (in order), then text
+            user_content = []
+            
+            # Process images in order: image1, image2, image3, image4
+            images = [image1, image2, image3, image4]
+            image_count = 0
+            for idx, img in enumerate(images, start=1):
+                if img is not None:
+                    print(f"Processing image{idx}")
+                    pil_image = tensor_to_pil(img)
+                    user_content.append({
+                        "type": "image",
+                        "image": pil_image,
+                    })
+                    image_count += 1
+            
+            if image_count > 0:
+                print(f"Total images added: {image_count}")
 
             try:
+                # Handle video if provided (takes precedence positioning but images still included)
                 if video_path:
                     print("deal video_path", video_path)
                     unique_id = uuid.uuid4().hex  # 生成唯一标识符
@@ -230,17 +370,18 @@ class QwenVL:
                     ]
                     subprocess.run(ffmpeg_command, check=True)
 
-                    messages[0]["content"].insert(0, {
+                    user_content.append({
                         "type": "video",
                         "video": processed_video_path,
                     })
-                else:
-                    print("deal image")
-                    pil_image = tensor_to_pil(image)
-                    messages[0]["content"].insert(0, {
-                        "type": "image",
-                        "image": pil_image,
-                    })
+                
+                # Add text prompt at the end
+                user_content.append({"type": "text", "text": text})
+            
+                messages = [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user_content},
+                ]
 
                 text = self.processor.apply_chat_template(
                     messages, tokenize=False, add_generation_prompt=True
@@ -311,14 +452,7 @@ class Qwen:
                 ),
                 "prompt": ("STRING", {"default": "", "multiline": True}),
                 "model": (
-                    [
-                        "Qwen2.5-3B-Instruct",
-                        "Qwen2.5-7B-Instruct",
-                        "Qwen2.5-14B-Instruct",
-                        "Qwen2.5-32B-Instruct",
-                        "Qwen3-4B-Thinking-2507",
-                        "Qwen3-4B-Instruct-2507"
-                    ],
+                    _get_text_model_list(),
                     {"default": "Qwen3-4B-Instruct-2507"},
                 ),
                 "quantization": (
@@ -326,13 +460,14 @@ class Qwen:
                     {"default": "none"},
                 ),  # add quantization type selection
                 "keep_model_loaded": ("BOOLEAN", {"default": False}),
+                "bypass": ("BOOLEAN", {"default": False}),
                 "temperature": (
                     "FLOAT",
                     {"default": 0.7, "min": 0, "max": 1, "step": 0.1},
                 ),
                 "max_new_tokens": (
                     "INT",
-                    {"default": 512, "min": 128, "max": 2048, "step": 1},
+                    {"default": 512, "min": 128, "max": 8000, "step": 1},
                 ),
                 "seed": ("INT", {"default": -1}),  # add seed parameter, default is -1
             },
@@ -349,16 +484,21 @@ class Qwen:
         model,
         quantization,
         keep_model_loaded,
+        bypass,
         temperature,
         max_new_tokens,
         seed,
     ):
+        # Bypass mode: pass prompt directly to output without model inference
+        if bypass:
+            return (prompt,)
+
         if not prompt.strip() and not system.strip():
             return ("Error: Both system and prompt are empty.",)
 
         if seed != -1:
             torch.manual_seed(seed)
-        model_id = f"qwen/{model}"
+        model_id = _get_model_repo_id(model, is_vl=False)
         # put downloaded model to model/LLM dir
         self.model_checkpoint = os.path.join(
             folder_paths.models_dir, "LLM", os.path.basename(model_id)
