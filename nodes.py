@@ -598,19 +598,7 @@ class QwenVL:
                     videos=video_inputs,
                     padding=True,
                     return_tensors="pt",
-                )
-                
-                # Move to GPU with optimal memory layout
-                # Ensure all tensors are contiguous for optimal performance
-                device = self.model.device
-                inputs = {
-                    k: v.to(device=device, non_blocking=True).contiguous() 
-                    if isinstance(v, torch.Tensor) else v 
-                    for k, v in inputs.items()
-                }
-                # Ensure CUDA operations are complete before generation
-                if torch.cuda.is_available():
-                    torch.cuda.synchronize()
+                ).to(self.model.device)
 
                 # Build generation kwargs with optimal settings
                 generation_kwargs = {
