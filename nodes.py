@@ -420,10 +420,11 @@ class QwenVL:
                 print(f"[SCG_LocalVLM] Loading with 8-bit quantization (device_map: {device_map})")
                 
             else:
-                # ONLY set torch_dtype when NOT quantizing
+                # For non-quantized models: DON'T use device_map to avoid Accelerate overhead
+                # This is the key fix for Flash Attention being slower than Eager
                 load_kwargs["torch_dtype"] = compute_dtype
-                load_kwargs["device_map"] = "auto"
-                print("[SCG_LocalVLM] Loading without quantization (full precision)")
+                # Don't set device_map - we'll move to GPU manually after loading
+                print("[SCG_LocalVLM] Loading without quantization (full precision, direct GPU load)")
 
             # Handle attention mode selection
             attention_used = "default (auto)"
@@ -468,13 +469,17 @@ class QwenVL:
                 
                 load_time = time.time() - load_start
                 
-                # Try to enable BetterTransformer for additional speed
-                if quantization == "none":  # BetterTransformer doesn't work with quantization
-                    try:
-                        self.model = self.model.to_bettertransformer()
-                        print("[SCG_LocalVLM]   BetterTransformer: enabled")
-                    except Exception:
-                        pass  # Not available or not supported
+                # For non-quantized models, move to GPU explicitly (avoids Accelerate overhead)
+                if quantization == "none":
+                    self.model = self.model.to(self.device)
+                    print(f"[SCG_LocalVLM]   Moved to device: {self.device}")
+                
+                # Try torch.compile for additional speed (PyTorch 2.0+)
+                try:
+                    self.model = torch.compile(self.model, mode="reduce-overhead")
+                    print("[SCG_LocalVLM]   torch.compile: enabled (reduce-overhead mode)")
+                except Exception as compile_err:
+                    print(f"[SCG_LocalVLM]   torch.compile: skipped ({type(compile_err).__name__})")
                 
                 # Print comprehensive model info
                 print(f"[SCG_LocalVLM] Model loaded successfully in {load_time:.2f}s")
@@ -595,20 +600,13 @@ class QwenVL:
                     return_tensors="pt",
                 ).to(self.model.device)
 
-                # Build generation kwargs with proper parameter handling
                 # Build generation kwargs with optimal settings
                 generation_kwargs = {
                     "max_new_tokens": max_new_tokens,
                     "do_sample": do_sample,
-                    "use_cache": True,  # CRITICAL: Enable KV cache
-                    "num_beams": 1,  # Disable beam search for speed
+                    "use_cache": True,  # CRITICAL: Enable KV cache for fast generation
+                    "num_beams": 1,  # Greedy/sampling is faster than beam search
                 }
-                
-                # Optimize batch size based on quantization
-                # Quantized models can handle slightly larger batches
-                if quantization != "none":
-                    # For quantized models, ensure efficient batch processing
-                    generation_kwargs["batch_size"] = 1  # Keep at 1 for now, can increase later
 
                 # Add pad_token_id to prevent warnings
                 if hasattr(self.processor, 'tokenizer'):
@@ -632,13 +630,16 @@ class QwenVL:
                 if repetition_penalty != 1.0:
                     generation_kwargs["repetition_penalty"] = repetition_penalty
 
-                # Start timing
-                import time
+                # Synchronize CUDA before timing for accurate measurement
+                if torch.cuda.is_available():
+                    torch.cuda.synchronize()
                 gen_start = time.time()
 
                 generated_ids = self.model.generate(**inputs, **generation_kwargs)
 
-                # Calculate performance
+                # Synchronize after generation for accurate timing
+                if torch.cuda.is_available():
+                    torch.cuda.synchronize()
                 gen_time = time.time() - gen_start
 
                 generated_ids_trimmed = [
@@ -881,10 +882,10 @@ class Qwen:
                 print(f"[SCG_LocalVLM] Loading with 8-bit quantization (device_map: {device_map})")
                 
             else:
-                # ONLY set torch_dtype when NOT quantizing
+                # For non-quantized models: DON'T use device_map to avoid Accelerate overhead
                 load_kwargs["torch_dtype"] = compute_dtype
-                load_kwargs["device_map"] = "auto"
-                print("[SCG_LocalVLM] Loading without quantization (full precision)")
+                # Don't set device_map - we'll move to GPU manually after loading
+                print("[SCG_LocalVLM] Loading without quantization (full precision, direct GPU load)")
 
             # Handle attention mode selection
             attention_used = "default (auto)"
@@ -922,13 +923,17 @@ class Qwen:
                 
                 load_time = time.time() - load_start
                 
-                # Try to enable BetterTransformer for additional speed
-                if quantization == "none":  # BetterTransformer doesn't work with quantization
-                    try:
-                        self.model = self.model.to_bettertransformer()
-                        print("[SCG_LocalVLM]   BetterTransformer: enabled")
-                    except Exception:
-                        pass  # Not available or not supported
+                # For non-quantized models, move to GPU explicitly (avoids Accelerate overhead)
+                if quantization == "none":
+                    self.model = self.model.to(self.device)
+                    print(f"[SCG_LocalVLM]   Moved to device: {self.device}")
+                
+                # Try torch.compile for additional speed (PyTorch 2.0+)
+                try:
+                    self.model = torch.compile(self.model, mode="reduce-overhead")
+                    print("[SCG_LocalVLM]   torch.compile: enabled (reduce-overhead mode)")
+                except Exception as compile_err:
+                    print(f"[SCG_LocalVLM]   torch.compile: skipped ({type(compile_err).__name__})")
                 
                 # Print comprehensive model info
                 print(f"[SCG_LocalVLM] Model loaded successfully in {load_time:.2f}s")
