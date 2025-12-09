@@ -1,10 +1,14 @@
-torch
-torchvision
-numpy
-pillow
+# Core dependencies for SCG_LocalVLM ComfyUI custom node
+# Note: torch, transformers, numpy, and pillow are already provided by ComfyUI
+
+# Model downloading from HuggingFace
 huggingface_hub
+
+# Required for device_map="auto" when loading quantized models
 accelerate
+
+# Qwen vision-language utilities for processing vision inputs
 qwen-vl-utils
+
+# Quantization support (4bit/8bit model loading)
 bitsandbytes
-optimum
-transformers>=4.57.1

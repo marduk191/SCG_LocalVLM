@@ -58,6 +58,14 @@ You can install through ComfyUI Manager (search for `Qwen-VL wrapper for ComfyUI
    pip install -r requirements.txt
    ```
 
+   **Note:** This only installs a minimal set of dependencies that aren't already provided by ComfyUI:
+   - `huggingface_hub` - For downloading models
+   - `accelerate` - For efficient model loading with quantization
+   - `qwen-vl-utils` - Qwen vision-language utilities
+   - `bitsandbytes` - Quantization support (4bit/8bit)
+   
+   Core dependencies like PyTorch, Transformers, NumPy, and Pillow are already included with ComfyUI.
+
 ## Supported Nodes
 
 ### QwenVL Node (Vision-Language)
