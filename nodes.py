@@ -725,6 +725,29 @@ class QwenVL:
                 kwargs_time = time.time() - kwargs_start
                 print(f"[SCG_LocalVLM] Generation kwargs built in {kwargs_time:.3f}s")
 
+                # PERFORMANCE FIX: Pre-process vision tokens ONCE to prevent re-encoding during generation
+                # This is the key fix for low GPU utilization (30%) issue
+                print(f"[SCG_LocalVLM] Pre-filling vision tokens...")
+                prefill_start = time.time()
+
+                with torch.inference_mode():
+                    # Forward pass to process vision and cache everything
+                    prefill_outputs = self.model(
+                        input_ids=inputs.input_ids,
+                        pixel_values=inputs.pixel_values if hasattr(inputs, 'pixel_values') else None,
+                        image_grid_thw=inputs.image_grid_thw if hasattr(inputs, 'image_grid_thw') else None,
+                        attention_mask=inputs.attention_mask if hasattr(inputs, 'attention_mask') else None,
+                        use_cache=True,
+                    )
+                    # Get the cached key-values from prefill
+                    past_key_values = prefill_outputs.past_key_values
+
+                if torch.cuda.is_available():
+                    torch.cuda.synchronize()
+
+                prefill_time = time.time() - prefill_start
+                print(f"[SCG_LocalVLM] Vision prefill completed in {prefill_time:.3f}s")
+
                 # Check GPU memory before generation
                 if torch.cuda.is_available():
                     torch.cuda.synchronize()
@@ -735,9 +758,17 @@ class QwenVL:
                     torch.cuda.synchronize()
                     torch.cuda.empty_cache()
 
-                print(f"[SCG_LocalVLM] Starting generation with {input_token_count} input tokens...")
+                print(f"[SCG_LocalVLM] Starting generation with cached vision tokens...")
                 gen_start = time.time()
-                generated_ids = self.model.generate(**inputs, **generation_kwargs)
+
+                # Generate using cached past_key_values (vision already processed)
+                # Only need the last input token since we have past_key_values
+                generation_kwargs["past_key_values"] = past_key_values
+                generated_ids = self.model.generate(
+                    input_ids=inputs.input_ids,  # Keep full input_ids for proper generation
+                    attention_mask=inputs.attention_mask if hasattr(inputs, 'attention_mask') else None,
+                    **generation_kwargs
+                )
                 gen_time = time.time() - gen_start
 
                 # Check GPU memory after generation
