@@ -529,14 +529,6 @@ class QwenVL:
                     for param in self.model.parameters():
                         param.grad = None
 
-                # PERFORMANCE: Set optimal torch backends
-                torch.backends.cuda.matmul.allow_tf32 = True
-                torch.backends.cudnn.allow_tf32 = True
-                torch.backends.cudnn.benchmark = True  # Auto-tune kernels
-                torch.backends.cuda.enable_flash_sdp(True)  # Enable flash SDPA
-                torch.backends.cuda.enable_mem_efficient_sdp(True)  # Enable memory-efficient SDPA
-                torch.backends.cuda.enable_math_sdp(False)  # Disable slow math SDPA fallback
-
                 # Print comprehensive model info
                 print(f"[SCG_LocalVLM] Model loaded successfully in {load_time:.2f}s")
                 print(f"[SCG_LocalVLM]   Device: {self.model.device}")
