@@ -669,11 +669,22 @@ class QwenVL:
                 processor_time = time.time() - processor_start
                 print(f"[SCG_LocalVLM] Processor (embedding) time: {processor_time:.3f}s")
 
+                # CRITICAL: Verify inputs are actually on GPU
+                print(f"[SCG_LocalVLM] Verifying input devices...")
+                print(f"[SCG_LocalVLM]   input_ids device: {inputs.input_ids.device}")
+                if hasattr(inputs, 'pixel_values') and inputs.pixel_values is not None:
+                    print(f"[SCG_LocalVLM]   pixel_values device: {inputs.pixel_values.device}")
+                    print(f"[SCG_LocalVLM]   pixel_values shape: {inputs.pixel_values.shape}")
+                if hasattr(inputs, 'image_grid_thw') and inputs.image_grid_thw is not None:
+                    print(f"[SCG_LocalVLM]   image_grid_thw device: {inputs.image_grid_thw.device}")
+
                 # Show input context size (important for understanding generation speed)
                 input_token_count = inputs.input_ids.shape[1]
                 print(f"[SCG_LocalVLM] Input context: {input_token_count} tokens (text + vision)")
 
-                # Build generation kwargs with optimal settings
+                # Timing check - see if there's a delay before generation
+                print(f"[SCG_LocalVLM] Building generation kwargs...")
+                kwargs_start = time.time()
                 generation_kwargs = {
                     "max_new_tokens": max_new_tokens,
                     "do_sample": do_sample,
@@ -703,11 +714,15 @@ class QwenVL:
                 if repetition_penalty != 1.0:
                     generation_kwargs["repetition_penalty"] = repetition_penalty
 
+                kwargs_time = time.time() - kwargs_start
+                print(f"[SCG_LocalVLM] Generation kwargs built in {kwargs_time:.3f}s")
+
                 # Check GPU memory before generation
                 if torch.cuda.is_available():
                     torch.cuda.synchronize()
                     gpu_mem_before = torch.cuda.memory_allocated(0) / 1024**3
 
+                print(f"[SCG_LocalVLM] Starting generation with {input_token_count} input tokens...")
                 gen_start = time.time()
                 generated_ids = self.model.generate(**inputs, **generation_kwargs)
                 gen_time = time.time() - gen_start
