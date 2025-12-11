@@ -669,6 +669,10 @@ class QwenVL:
                 processor_time = time.time() - processor_start
                 print(f"[SCG_LocalVLM] Processor (embedding) time: {processor_time:.3f}s")
 
+                # Show input context size (important for understanding generation speed)
+                input_token_count = inputs.input_ids.shape[1]
+                print(f"[SCG_LocalVLM] Input context: {input_token_count} tokens (text + vision)")
+
                 # Build generation kwargs with optimal settings
                 generation_kwargs = {
                     "max_new_tokens": max_new_tokens,
@@ -699,9 +703,22 @@ class QwenVL:
                 if repetition_penalty != 1.0:
                     generation_kwargs["repetition_penalty"] = repetition_penalty
 
+                # Check GPU memory before generation
+                if torch.cuda.is_available():
+                    torch.cuda.synchronize()
+                    gpu_mem_before = torch.cuda.memory_allocated(0) / 1024**3
+
                 gen_start = time.time()
                 generated_ids = self.model.generate(**inputs, **generation_kwargs)
                 gen_time = time.time() - gen_start
+
+                # Check GPU memory after generation
+                if torch.cuda.is_available():
+                    torch.cuda.synchronize()
+                    gpu_mem_after = torch.cuda.memory_allocated(0) / 1024**3
+                    gpu_mem_peak = torch.cuda.max_memory_allocated(0) / 1024**3
+                    print(f"[SCG_LocalVLM] GPU Memory during generation: {gpu_mem_before:.2f}GB → {gpu_mem_after:.2f}GB (peak: {gpu_mem_peak:.2f}GB)")
+                    torch.cuda.reset_peak_memory_stats(0)
 
                 generated_ids_trimmed = [
                     out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
