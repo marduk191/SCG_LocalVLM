@@ -520,7 +520,34 @@ class QwenVL:
                 
                 # Set model to eval mode
                 self.model.eval()
-                
+
+                # CRITICAL: Clear CUDA cache and reset internal state to avoid random slowness
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    torch.cuda.synchronize()
+                    # Reset any accumulated gradients or state
+                    for param in self.model.parameters():
+                        param.grad = None
+
+                # PERFORMANCE: Compile model for faster generation (2-3x speedup possible)
+                # torch.compile optimizes the model graph for the specific hardware
+                try:
+                    if not hasattr(self.model, '_is_compiled'):
+                        print(f"[SCG_LocalVLM] Compiling model for optimized generation...")
+                        compile_start = time.time()
+                        # Use reduce-overhead mode for maximum throughput
+                        self.model = torch.compile(
+                            self.model,
+                            mode="reduce-overhead",
+                            fullgraph=False,
+                            dynamic=False
+                        )
+                        self.model._is_compiled = True
+                        compile_time = time.time() - compile_start
+                        print(f"[SCG_LocalVLM] Model compiled in {compile_time:.2f}s")
+                except Exception as e:
+                    print(f"[SCG_LocalVLM] Could not compile model (will use eager mode): {str(e)}")
+
                 # Print comprehensive model info
                 print(f"[SCG_LocalVLM] Model loaded successfully in {load_time:.2f}s")
                 print(f"[SCG_LocalVLM]   Device: {self.model.device}")
@@ -721,6 +748,11 @@ class QwenVL:
                 if torch.cuda.is_available():
                     torch.cuda.synchronize()
                     gpu_mem_before = torch.cuda.memory_allocated(0) / 1024**3
+
+                # CRITICAL: Force CUDA sync and clear cache before generation to avoid random slowness
+                if torch.cuda.is_available():
+                    torch.cuda.synchronize()
+                    torch.cuda.empty_cache()
 
                 print(f"[SCG_LocalVLM] Starting generation with {input_token_count} input tokens...")
                 gen_start = time.time()
