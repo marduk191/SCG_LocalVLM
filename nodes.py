@@ -264,6 +264,7 @@ class QwenVL:
         self.model_checkpoint = None
         self.processor = None
         self.model = None
+        self.current_image_resolution = None  # Track current resolution setting
         self.device = (
             torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
         )
@@ -276,6 +277,7 @@ class QwenVL:
         _maybe_move_to_cpu(self.model)
         self.model = None
         self.processor = None
+        self.current_image_resolution = None
         _clear_cuda_memory()
 
     @classmethod
@@ -330,6 +332,10 @@ class QwenVL:
                     {"default": 512, "min": 128, "max": 8000, "step": 1},
                 ),
                 "seed": ("INT", {"default": -1}),
+                "image_resolution": (
+                    ["low (256x28x28)", "medium (512x28x28)", "high (768x28x28)", "ultra (1024x28x28)"],
+                    {"default": "medium (512x28x28)"},
+                ),
             },
             "optional": {
                 "image1": ("IMAGE",),
@@ -362,6 +368,7 @@ class QwenVL:
         repetition_penalty,
         max_new_tokens,
         seed,
+        image_resolution,
         image1=None,
         image2=None,
         image3=None,
@@ -389,18 +396,31 @@ class QwenVL:
                 local_dir=self.model_checkpoint,
             )
 
-        if self.processor is None:
-            # Define min_pixels and max_pixels:
+        # Recreate processor if it doesn't exist OR if resolution setting changed
+        if self.processor is None or self.current_image_resolution != image_resolution:
+            # Define min_pixels and max_pixels based on image_resolution setting:
             # Images will be resized to maintain their aspect ratio
             # within the range of min_pixels and max_pixels.
-            min_pixels = 256*28*28
-            max_pixels = 1024*28*28 
+            # Lower resolution = faster processing, higher resolution = better quality
+            resolution_map = {
+                "low (256x28x28)": (128*28*28, 256*28*28),      # 100K - 200K pixels (fastest)
+                "medium (512x28x28)": (256*28*28, 512*28*28),    # 200K - 400K pixels (balanced)
+                "high (768x28x28)": (512*28*28, 768*28*28),      # 400K - 600K pixels (quality)
+                "ultra (1024x28x28)": (768*28*28, 1024*28*28),   # 600K - 800K pixels (original, slowest)
+            }
+            min_pixels, max_pixels = resolution_map.get(image_resolution, (256*28*28, 512*28*28))
+
+            if self.current_image_resolution != image_resolution:
+                print(f"[SCG_LocalVLM] Image resolution changed: {self.current_image_resolution} → {image_resolution}")
+            print(f"[SCG_LocalVLM] Image resolution: {image_resolution}")
+            print(f"[SCG_LocalVLM] min_pixels={min_pixels:,}, max_pixels={max_pixels:,}")
 
             self.processor = AutoProcessor.from_pretrained(
                 self.model_checkpoint,
                 min_pixels=min_pixels,
                 max_pixels=max_pixels,
             )
+            self.current_image_resolution = image_resolution
 
         if self.model is None:
             load_start = time.time()
@@ -560,10 +580,11 @@ class QwenVL:
         with torch.inference_mode():
             # Build user content list - images first (in order), then text
             user_content = []
-            
+
             # Process images in order: image1, image2, image3, image4
             images = [image1, image2, image3, image4]
             image_count = 0
+            img_convert_start = time.time()
             for idx, img in enumerate(images, start=1):
                 if img is not None:
                     print(f"Processing image{idx}")
@@ -573,9 +594,11 @@ class QwenVL:
                         "image": pil_image,
                     })
                     image_count += 1
-            
+            img_convert_time = time.time() - img_convert_start
+
             if image_count > 0:
                 print(f"Total images added: {image_count}")
+                print(f"[SCG_LocalVLM] Image conversion time: {img_convert_time:.3f}s")
 
             try:
                 # Handle video if provided (takes precedence positioning but images still included)
@@ -611,9 +634,15 @@ class QwenVL:
                     messages, tokenize=False, add_generation_prompt=True
                 )
                 print("deal messages", messages)
+
+                # Time vision info processing
+                vision_start = time.time()
                 image_inputs, video_inputs = process_vision_info(messages)
-                
-                # Process inputs on CPU first
+                vision_time = time.time() - vision_start
+                print(f"[SCG_LocalVLM] Vision info processing time: {vision_time:.3f}s")
+
+                # Time processor (image embedding generation) - this is often the slowest part
+                processor_start = time.time()
                 inputs = self.processor(
                     text=[text],
                     images=image_inputs,
@@ -621,6 +650,8 @@ class QwenVL:
                     padding=True,
                     return_tensors="pt",
                 ).to(self.model.device)
+                processor_time = time.time() - processor_start
+                print(f"[SCG_LocalVLM] Processor (embedding) time: {processor_time:.3f}s")
 
                 # Build generation kwargs with optimal settings
                 generation_kwargs = {
@@ -668,7 +699,21 @@ class QwenVL:
                     print(f"[SCG_LocalVLM]   Tokens: {tokens_generated}")
                     print(f"[SCG_LocalVLM]   Time: {gen_time:.2f}s")
                     print(f"[SCG_LocalVLM]   Speed: {tokens_per_sec:.2f} tokens/sec")
-                    
+
+                    # Show timing breakdown if images were processed
+                    if image_count > 0:
+                        total_prep_time = img_convert_time + vision_time + processor_time
+                        print(f"[SCG_LocalVLM] Timing Breakdown:")
+                        print(f"[SCG_LocalVLM]   Image conversion: {img_convert_time:.3f}s")
+                        print(f"[SCG_LocalVLM]   Vision processing: {vision_time:.3f}s")
+                        print(f"[SCG_LocalVLM]   Image embedding:  {processor_time:.3f}s ← SLOWEST (can be optimized)")
+                        print(f"[SCG_LocalVLM]   Text generation:  {gen_time:.3f}s")
+                        print(f"[SCG_LocalVLM]   Total prep time:  {total_prep_time:.3f}s")
+                        if processor_time > 1.0:
+                            print(f"[SCG_LocalVLM] TIP: Image embedding is slow. Try:")
+                            print(f"[SCG_LocalVLM]   - Use 'low' or 'medium' image_resolution for faster processing")
+                            print(f"[SCG_LocalVLM]   - Current: {image_resolution}")
+
                     # Add performance analysis
                     if quantization == "4bit" and tokens_per_sec < 10:
                         print(f"[SCG_LocalVLM] WARNING: 4bit performance unusually slow!")
