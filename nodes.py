@@ -37,6 +37,7 @@ if _NEEDS_PATCH:
 
     # Monkey patch to optimize vision token handling in 4.56.2
     _original_qwen3_prepare_inputs = Qwen3VLForConditionalGeneration.prepare_inputs_for_generation
+    _original_qwen25_prepare_inputs = Qwen2_5_VLForConditionalGeneration.prepare_inputs_for_generation
 
     def _patched_prepare_inputs_for_generation(self, input_ids, past_key_values=None, **kwargs):
         """
@@ -44,8 +45,11 @@ if _NEEDS_PATCH:
         In 4.56.2, pixel_values were being passed through on every generation step,
         causing the vision encoder to run repeatedly (30% GPU util bottleneck).
         """
-        # Call original method
-        model_inputs = _original_qwen3_prepare_inputs(self, input_ids, past_key_values, **kwargs)
+        # Call original method - check which class this is
+        if isinstance(self, Qwen3VLForConditionalGeneration):
+            model_inputs = _original_qwen3_prepare_inputs(self, input_ids, past_key_values, **kwargs)
+        else:  # Qwen2_5_VLForConditionalGeneration
+            model_inputs = _original_qwen25_prepare_inputs(self, input_ids, past_key_values, **kwargs)
 
         # CRITICAL FIX: Remove pixel_values after first pass
         # Vision encoder should only run once during prefill, not on every decode step
@@ -57,8 +61,9 @@ if _NEEDS_PATCH:
 
         return model_inputs
 
-    # Apply the patch
+    # Apply the patch to BOTH model classes
     Qwen3VLForConditionalGeneration.prepare_inputs_for_generation = _patched_prepare_inputs_for_generation
+    Qwen2_5_VLForConditionalGeneration.prepare_inputs_for_generation = _patched_prepare_inputs_for_generation
 
 # PERFORMANCE: Set PyTorch thread count for optimal CPU parallelism
 # Can be overridden via environment variable: PYTORCH_THREADS
